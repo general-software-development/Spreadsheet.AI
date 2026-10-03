@@ -1,0 +1,24 @@
+{
+  "name": "spreadsheet.ai",
+  "version": "1.0.0",
+  "description": "",
+  "homepage": "https://github.com/general-software-development/Spreadsheet.AI#readme",
+  "bugs": {
+    "url": "https://github.com/general-software-development/Spreadsheet.AI/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/general-software-development/Spreadsheet.AI.git"
+  },
+  "license": "AGPL-3.0",
+  "author": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "npx vitest run site/"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

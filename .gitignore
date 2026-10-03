@@ -34,3 +34,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Virtual Environments
+.venv/
+
+# Caches
+.pytest_cache/
