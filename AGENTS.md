@@ -35,6 +35,8 @@ Use TypeScript for all code. Use `tsx` to run it -- do NOT build.
 
 For login, make users log in via Google OAuth.
 
+For all code, use TABS. TABS are displayed in 4-space width.
+
 # Legal
 
 1. Do not collect, process, or store data that is unnecessary to the functionality of the service.
