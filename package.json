@@ -1,24 +1,27 @@
 {
   "name": "spreadsheet.ai",
   "version": "1.0.0",
-  "description": "",
-  "homepage": "https://github.com/general-software-development/Spreadsheet.AI#readme",
-  "bugs": {
-    "url": "https://github.com/general-software-development/Spreadsheet.AI/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/general-software-development/Spreadsheet.AI.git"
-  },
-  "license": "AGPL-3.0",
-  "author": "",
+  "private": true,
   "type": "module",
-  "main": "index.js",
   "scripts": {
-    "test": "npx vitest run site/"
+    "dev": "bunx tsx site/server.ts",
+    "test": "vitest run --config site/vitest.config.ts",
+    "typecheck": "tsc -p site/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^24.7.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "jsdom": "^27.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
     "vitest": "^5.0.3"
   }
 }
