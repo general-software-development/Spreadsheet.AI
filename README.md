@@ -30,3 +30,7 @@ Google still calls the credential a Web/OAuth client ID in Cloud Console, but Sp
 ## Security and privacy
 
 Only the Google subject identifier, email address, display name, session metadata, encrypted spreadsheet title, and encrypted workbook payload are persisted. The Google ID token is verified during sign-in and is not stored. Session tokens are stored as SHA3-512 hashes. Spreadsheet titles and workbook payloads are encrypted at rest with AES-GCM using a key derived from `SPREADSHEET_ENCRYPTION_KEY` via SHA3-512.
+
+<br>
+<p align="center">&copy; Copyright 2026 bogdan-glitchm, Licensed under the <b>GNU AGPL-3</b> License.</p>
+
