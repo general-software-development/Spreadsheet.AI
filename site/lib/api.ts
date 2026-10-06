@@ -35,6 +35,14 @@ export class SpreadsheetApi {
     return (await response.json()) as T;
   }
 
+  async signInWithGoogle(credential: string): Promise<UserView> {
+    return await this.request<UserView>("/auth/google", {
+      method: "POST",
+      headers: { "X-Google-Sign-In": "google-identity-services" },
+      body: JSON.stringify({ credential }),
+    });
+  }
+
   async currentUser(): Promise<UserView> {
     return await this.request<UserView>("/auth/me");
   }
@@ -67,10 +75,6 @@ export class SpreadsheetApi {
 
   async logout(): Promise<void> {
     await this.request<void>("/auth/logout", { method: "POST" });
-  }
-
-  loginUrl(returnTo = "/sheets"): string {
-    return `${this.baseUrl}/auth/google/start?return_to=${encodeURIComponent(returnTo)}`;
   }
 }
 

@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { AppLogo } from "@/components/AppLogo";
+import { GoogleSignInButton } from "@/components/GoogleSignInButton";
 
 export default function HomePage() {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  const loginUrl = `${apiUrl.replace(/\/$/, "")}/auth/google/start?return_to=%2Fsheets`;
+  const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
   return (
     <main className="landing-shell">
       <nav className="landing-nav">
@@ -19,10 +19,7 @@ export default function HomePage() {
           <h1>Your ideas deserve a <span>better grid.</span></h1>
           <p>Create, edit, calculate, and securely store spreadsheets without the clutter. Your workbook content is encrypted before it reaches persistent storage.</p>
           <div className="hero-actions">
-            <a className="button primary large" href={loginUrl}>
-              <span className="google-g">G</span>
-              Continue with Google
-            </a>
+            <GoogleSignInButton clientId={googleClientId} />
             <a className="text-link" href="#features">See what’s inside →</a>
           </div>
           <p className="fine-print">By continuing, you agree to our <Link href="/terms">Terms</Link> and acknowledge our <Link href="/privacy">Privacy Policy</Link>.</p>

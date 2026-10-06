@@ -20,4 +20,30 @@ describe("SpreadsheetApi integration contract", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/api/spreadsheets", expect.objectContaining({ method: "POST", credentials: "include" }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, "http://api.test/api/spreadsheets/1", expect.objectContaining({ method: "PUT", credentials: "include" }));
   });
+
+  it("signs in with a Google Identity Services credential", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: 7, email: "user@example.com", display_name: "Example User" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const api = new SpreadsheetApi("http://api.test");
+    const user = await api.signInWithGoogle("google-signed-id-token");
+
+    expect(user.email).toBe("user@example.com");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/auth/google",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({ credential: "google-signed-id-token" }),
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Google-Sign-In": "google-identity-services",
+        }),
+      }),
+    );
+  });
 });

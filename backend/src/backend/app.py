@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Annotated, AsyncIterator
 
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse
 
-from backend.auth import AuthService, GoogleOAuthClient
+from backend.auth import AuthService, GoogleIdentityClient, GoogleIdentityUnavailableError
 from backend.config import Settings, SettingsLoader
 from backend.crypto import DataCipher
 from backend.database import Database
-from backend.models import SpreadsheetCreate, SpreadsheetDocument, SpreadsheetSummary, SpreadsheetUpdate, UserView
-from backend.repositories import OAuthStateRepository, SessionRepository, SpreadsheetRepository, UserRepository
+from backend.models import (
+    GoogleSignInRequest,
+    SpreadsheetCreate,
+    SpreadsheetDocument,
+    SpreadsheetSummary,
+    SpreadsheetUpdate,
+    UserView,
+)
+from backend.repositories import SessionRepository, SpreadsheetRepository, UserRepository
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -28,13 +33,11 @@ class AppServices:
         self.database = Database(settings.database_path)
         self.users = UserRepository(self.database)
         self.sessions = SessionRepository(self.database)
-        self.oauth_states = OAuthStateRepository(self.database)
         self.spreadsheets = SpreadsheetRepository(self.database, DataCipher(settings.encryption_secret))
         self.auth = AuthService(
             self.users,
             self.sessions,
-            self.oauth_states,
-            GoogleOAuthClient(settings),
+            GoogleIdentityClient(settings),
         )
 
 
@@ -59,12 +62,6 @@ class AuthDependency:
 _current_user = AuthDependency()
 
 
-def _safe_return_path(return_to: str) -> str:
-    if not return_to.startswith("/") or return_to.startswith("//"):
-        return "/sheets"
-    return return_to
-
-
 def create_app(settings: Settings | None = None) -> FastAPI:
     _settings = settings or SettingsLoader.load()
     _services = AppServices(_settings)
@@ -81,7 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=[_settings.frontend_origin],
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE"],
-        allow_headers=["Content-Type", "X-Test-User"],
+        allow_headers=["Content-Type", "X-Test-User", "X-Google-Sign-In"],
     )
 
     @_app.get("/up/health", response_class=PlainTextResponse)
@@ -92,40 +89,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _logger.exception("Health check failed")
             return f"error: {_error}"
 
-    @_app.get("/auth/google/start")
-    async def google_start(return_to: Annotated[str, Query()] = "/sheets") -> Response:
-        if not _settings.google_client_id or not _settings.google_client_secret:
+    @_app.post("/auth/google", response_model=UserView)
+    async def google_sign_in(
+        payload: GoogleSignInRequest,
+        response: Response,
+        x_google_sign_in: Annotated[str | None, Header()] = None,
+    ) -> UserView:
+        if not _settings.google_client_id:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Google OAuth is not configured",
+                detail="Sign in with Google is not configured",
             )
-        _state, _url = await _services.auth.begin_google_login(_safe_return_path(return_to))
-        _response = RedirectResponse(_url, status_code=status.HTTP_302_FOUND)
-        _response.set_cookie(
-            "oauth_state",
-            _state,
-            max_age=600,
-            httponly=True,
-            secure=_settings.secure_cookies,
-            samesite="lax",
-        )
-        return _response
-
-    @_app.get("/auth/google/callback")
-    async def google_callback(
-        code: Annotated[str, Query()],
-        state: Annotated[str, Query()],
-        oauth_state: Annotated[str | None, Cookie()] = None,
-    ) -> Response:
-        if oauth_state is None or not secrets.compare_digest(oauth_state, state):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth state mismatch")
+        if x_google_sign_in != "google-identity-services":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid sign-in request")
         try:
-            _user, _session_token, _return_path = await _services.auth.finish_google_login(code, state)
-        except (ValueError, RuntimeError) as _error:
-            _logger.warning("OAuth callback failed: %s", _error)
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(_error)) from _error
-        _response = RedirectResponse(f"{_settings.frontend_origin}{_return_path}", status_code=status.HTTP_302_FOUND)
-        _response.set_cookie(
+            _user, _session_token = await _services.auth.sign_in_with_google(payload.credential)
+        except GoogleIdentityUnavailableError as _error:
+            _logger.error("Google identity verification is unavailable: %s", _error)
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(_error)) from _error
+        except ValueError as _error:
+            _logger.warning("Sign in with Google failed: %s", _error)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(_error)) from _error
+        response.set_cookie(
             "spreadsheet_session",
             _session_token,
             max_age=60 * 60 * 24 * 30,
@@ -133,14 +118,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             secure=_settings.secure_cookies,
             samesite="lax",
         )
-        _response.delete_cookie(
-            "oauth_state",
-            httponly=True,
-            secure=_settings.secure_cookies,
-            samesite="lax",
-        )
         _logger.info("Session created for user_id=%s", _user.id)
-        return _response
+        return _user
 
     @_app.get("/auth/me", response_model=UserView)
     async def me(user: Annotated[UserView, Depends(_current_user)]) -> UserView:

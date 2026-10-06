@@ -77,33 +77,6 @@ class SessionRepository:
         await self._database.run(_delete)
 
 
-class OAuthStateRepository:
-    def __init__(self, database: Database) -> None:
-        self._database = database
-
-    async def create(self, state_hash: str, return_path: str, expires_at: datetime) -> None:
-        def _create(_connection: sqlite3.Connection) -> None:
-            _connection.execute(
-                "INSERT INTO oauth_states(state_hash, return_path, expires_at) VALUES (?, ?, ?)",
-                (state_hash, return_path, expires_at.isoformat()),
-            )
-
-        await self._database.run(_create)
-
-    async def consume(self, state_hash: str) -> str | None:
-        def _consume(_connection: sqlite3.Connection) -> str | None:
-            _row = _connection.execute(
-                "SELECT return_path, expires_at FROM oauth_states WHERE state_hash = ?",
-                (state_hash,),
-            ).fetchone()
-            _connection.execute("DELETE FROM oauth_states WHERE state_hash = ?", (state_hash,))
-            if _row is None or datetime.fromisoformat(_row["expires_at"]) <= datetime.now(UTC):
-                return None
-            return str(_row["return_path"])
-
-        return await self._database.run(_consume)
-
-
 class SpreadsheetRepository:
     def __init__(self, database: Database, cipher: DataCipher) -> None:
         self._database = database

@@ -36,11 +36,6 @@ class Database:
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     expires_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS oauth_states (
-                    state_hash TEXT PRIMARY KEY,
-                    return_path TEXT NOT NULL,
-                    expires_at TEXT NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS spreadsheets (
                     id TEXT PRIMARY KEY,
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -51,6 +46,7 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_spreadsheets_user_updated
                     ON spreadsheets(user_id, updated_at DESC);
+                DROP TABLE IF EXISTS oauth_states;
                 """
             )
 
