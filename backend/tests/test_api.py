@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from backend.app import create_app
+from backend.auth import GoogleIdentityClient, GoogleProfile
 from backend.config import Settings
 
 
@@ -16,9 +17,7 @@ class TestApi:
             database_path=tmp_path / "test.db",
             encryption_secret="integration-test-secret",
             frontend_origin="http://localhost:3000",
-            google_client_id="",
-            google_client_secret="",
-            google_redirect_uri="http://localhost:8000/auth/google/callback",
+            google_client_id="test-google-client-id",
             secure_cookies=False,
             testing=True,
         )
@@ -78,3 +77,35 @@ class TestApi:
         assert _deleted.status_code == 204
         _missing = await client.get(f"/api/spreadsheets/{_spreadsheet_id}", headers=_headers)
         assert _missing.status_code == 404
+
+    @pytest.mark.anyio
+    async def test_sign_in_with_google_creates_session(
+        self,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def _verify_credential(_client: GoogleIdentityClient, credential: str) -> GoogleProfile:
+            assert credential == "signed-google-id-token"
+            return GoogleProfile(
+                subject="google-user-123",
+                email="user@example.com",
+                name="Example User",
+            )
+
+        monkeypatch.setattr(GoogleIdentityClient, "verify_credential", _verify_credential)
+
+        _forbidden = await client.post("/auth/google", json={"credential": "signed-google-id-token"})
+        assert _forbidden.status_code == 403
+
+        _signed_in = await client.post(
+            "/auth/google",
+            json={"credential": "signed-google-id-token"},
+            headers={"X-Google-Sign-In": "google-identity-services"},
+        )
+        assert _signed_in.status_code == 200
+        assert _signed_in.json()["email"] == "user@example.com"
+        assert "spreadsheet_session=" in _signed_in.headers.get("set-cookie", "")
+
+        _me = await client.get("/auth/me")
+        assert _me.status_code == 200
+        assert _me.json()["display_name"] == "Example User"

@@ -1,7 +1,7 @@
 [project]
 name = "spreadsheet-ai"
 version = "0.1.0"
-description = "Secure collaborative-style spreadsheet editor with Google OAuth and encrypted SQLite storage"
+description = "Secure collaborative-style spreadsheet editor with Sign in with Google and encrypted SQLite storage"
 readme = "README.md"
 authors = [
     { name = "Bogdan", email = "github.34373732@gmail.com" }

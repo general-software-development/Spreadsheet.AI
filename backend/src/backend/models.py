@@ -42,6 +42,10 @@ class SpreadsheetDocument(SpreadsheetSummary):
     workbook: WorkbookData
 
 
+class GoogleSignInRequest(BaseModel):
+    credential: str = Field(min_length=1, max_length=10_000)
+
+
 class UserView(BaseModel):
     id: int
     email: str
