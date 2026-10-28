@@ -28,3 +28,36 @@ export interface UserView {
   email: string;
   display_name: string;
 }
+
+export type AIMode = "assist" | "interpret" | "explain";
+export type AIContextScope = "current_sheet" | "workbook";
+
+export interface GeminiSettings {
+  configured: boolean;
+  status: string;
+  primary_model: string;
+  fallback_model: string;
+  validated_at: string | null;
+}
+
+export interface AIAccessGrant {
+  token: string;
+  spreadsheet_id: string | null;
+  permission: string;
+  expires_at: string;
+}
+
+export interface AIMessageResponse {
+  mode: AIMode;
+  model: string;
+  message: string;
+  sections: Record<string, string[]>;
+  changed_ranges: string[];
+  spreadsheet: SpreadsheetDocument | null;
+}
+
+export interface AICreateSpreadsheetResponse {
+  model: string;
+  message: string;
+  spreadsheet: SpreadsheetDocument;
+}

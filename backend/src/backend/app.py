@@ -8,11 +8,22 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
+from backend.ai import GeminiAuthenticationError, GeminiGateway, GeminiQuotaError, GeminiResponseError, GeminiUnavailableError
+from backend.ai_service import AIAccessDeniedError, AIAssistantService, AIKeyNotConfiguredError, AIResourceNotFoundError
 from backend.auth import AuthService, GoogleIdentityClient, GoogleIdentityUnavailableError
 from backend.config import Settings, SettingsLoader
 from backend.crypto import DataCipher
 from backend.database import Database
 from backend.models import (
+    AIAccessGrantRequest,
+    AIAccessGrantRevokeRequest,
+    AIAccessGrantView,
+    AICreateSpreadsheetRequest,
+    AICreateSpreadsheetResponse,
+    AIMessageRequest,
+    AIMessageResponse,
+    GeminiSettingsUpdate,
+    GeminiSettingsView,
     GoogleSignInRequest,
     SpreadsheetCreate,
     SpreadsheetDocument,
@@ -20,7 +31,7 @@ from backend.models import (
     SpreadsheetUpdate,
     UserView,
 )
-from backend.repositories import SessionRepository, SpreadsheetRepository, UserRepository
+from backend.repositories import AIAccessGrantRepository, GeminiSettingsRepository, SessionRepository, SpreadsheetRepository, UserRepository
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -34,6 +45,17 @@ class AppServices:
         self.users = UserRepository(self.database)
         self.sessions = SessionRepository(self.database)
         self.spreadsheets = SpreadsheetRepository(self.database, DataCipher(settings.encryption_secret))
+        self.gemini_settings = GeminiSettingsRepository(
+            self.database,
+            DataCipher(f"{settings.encryption_secret}:gemini-api-key"),
+        )
+        self.ai_grants = AIAccessGrantRepository(self.database)
+        self.ai = AIAssistantService(
+            self.gemini_settings,
+            self.ai_grants,
+            self.spreadsheets,
+            GeminiGateway(),
+        )
         self.auth = AuthService(
             self.users,
             self.sessions,
@@ -180,6 +202,106 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not await _services.spreadsheets.delete(user.id, spreadsheet_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Spreadsheet not found")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @_app.get("/api/settings/gemini", response_model=GeminiSettingsView)
+    async def gemini_settings(user: Annotated[UserView, Depends(_current_user)]) -> GeminiSettingsView:
+        return await _services.ai.settings_view(user.id)
+
+    @_app.put("/api/settings/gemini", response_model=GeminiSettingsView)
+    async def save_gemini_settings(
+        payload: GeminiSettingsUpdate,
+        user: Annotated[UserView, Depends(_current_user)],
+    ) -> GeminiSettingsView:
+        try:
+            return await _services.ai.save_api_key(user.id, payload.api_key)
+        except GeminiAuthenticationError as _error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(_error)) from _error
+        except (GeminiQuotaError, GeminiUnavailableError) as _error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(_error)) from _error
+        except GeminiResponseError as _error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(_error)) from _error
+
+    @_app.post("/api/settings/gemini/test", response_model=GeminiSettingsView)
+    async def test_gemini_settings(user: Annotated[UserView, Depends(_current_user)]) -> GeminiSettingsView:
+        try:
+            return await _services.ai.test_api_key(user.id)
+        except AIKeyNotConfiguredError as _error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(_error)) from _error
+        except GeminiAuthenticationError as _error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(_error)) from _error
+        except (GeminiQuotaError, GeminiUnavailableError) as _error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(_error)) from _error
+        except GeminiResponseError as _error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(_error)) from _error
+
+    @_app.delete("/api/settings/gemini", status_code=status.HTTP_204_NO_CONTENT)
+    async def remove_gemini_settings(user: Annotated[UserView, Depends(_current_user)]) -> Response:
+        await _services.ai.remove_api_key(user.id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @_app.post("/api/ai/access-grants", response_model=AIAccessGrantView, status_code=status.HTTP_201_CREATED)
+    async def create_ai_access_grant(
+        payload: AIAccessGrantRequest,
+        user: Annotated[UserView, Depends(_current_user)],
+    ) -> AIAccessGrantView:
+        try:
+            return await _services.ai.create_spreadsheet_grant(user.id, payload.spreadsheet_id)
+        except AIResourceNotFoundError as _error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(_error)) from _error
+
+    @_app.post("/api/ai/create-grants", response_model=AIAccessGrantView, status_code=status.HTTP_201_CREATED)
+    async def create_ai_creation_grant(user: Annotated[UserView, Depends(_current_user)]) -> AIAccessGrantView:
+        return await _services.ai.create_new_spreadsheet_grant(user.id)
+
+    @_app.post("/api/ai/access-grants/revoke", status_code=status.HTTP_204_NO_CONTENT)
+    async def revoke_ai_access_grant(
+        payload: AIAccessGrantRevokeRequest,
+        user: Annotated[UserView, Depends(_current_user)],
+    ) -> Response:
+        await _services.ai.revoke_grant(user.id, payload.token)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @_app.post("/api/ai/messages", response_model=AIMessageResponse)
+    async def ai_message(
+        payload: AIMessageRequest,
+        user: Annotated[UserView, Depends(_current_user)],
+    ) -> AIMessageResponse:
+        try:
+            return await _services.ai.message(user.id, payload)
+        except AIKeyNotConfiguredError as _error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(_error)) from _error
+        except AIAccessDeniedError as _error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(_error)) from _error
+        except AIResourceNotFoundError as _error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(_error)) from _error
+        except GeminiAuthenticationError as _error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(_error)) from _error
+        except GeminiQuotaError as _error:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(_error)) from _error
+        except (GeminiUnavailableError, GeminiResponseError) as _error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(_error)) from _error
+        except ValueError as _error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(_error)) from _error
+
+    @_app.post("/api/ai/create-spreadsheet", response_model=AICreateSpreadsheetResponse, status_code=status.HTTP_201_CREATED)
+    async def ai_create_spreadsheet(
+        payload: AICreateSpreadsheetRequest,
+        user: Annotated[UserView, Depends(_current_user)],
+    ) -> AICreateSpreadsheetResponse:
+        try:
+            return await _services.ai.create_spreadsheet_from_ai(user.id, payload.access_token, payload.message)
+        except AIKeyNotConfiguredError as _error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(_error)) from _error
+        except AIAccessDeniedError as _error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(_error)) from _error
+        except GeminiAuthenticationError as _error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(_error)) from _error
+        except GeminiQuotaError as _error:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(_error)) from _error
+        except (GeminiUnavailableError, GeminiResponseError) as _error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(_error)) from _error
+        except ValueError as _error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(_error)) from _error
 
     return _app
 

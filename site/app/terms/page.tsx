@@ -8,12 +8,14 @@ export default function TermsPage() {
       <article className="legal-card">
         <p className="eyebrow">LEGAL</p>
         <h1>Terms of Service</h1>
-        <p className="legal-date">Effective: 3 October 2026</p>
-        <p>These Terms govern use of Spreadsheet.AI. By using the service, you agree to use it lawfully and only with data you are authorised to store and process.</p>
+        <p className="legal-date">Effective: 28 October 2026</p>
+        <p>These Terms govern use of Spreadsheet.AI. By using the service, you agree to use it lawfully and only with data you are authorised to store, process, and—when you invoke Gemini features—send to Google.</p>
         <h2>Your account</h2>
-        <p>You are responsible for maintaining control of your Google account and for activity performed through your Spreadsheet.AI session. You must not attempt to bypass access controls, disrupt the service, or access another user’s data.</p>
+        <p>You are responsible for maintaining control of your Google account, Gemini API key, and activity performed through your Spreadsheet.AI session. You must not attempt to bypass access controls, disrupt the service, or access another user’s data.</p>
         <h2>Your content</h2>
         <p>You retain ownership of the spreadsheet content you upload or create. You grant the service only the limited rights necessary to store, process, and return that content to you as part of operating Spreadsheet.AI.</p>
+        <h2>Gemini features</h2>
+        <p>Gemini features are optional and use the API key you supply. Spreadsheet.AI restricts its model allowlist to Gemini model IDs that are currently documented as free-tier models, but your own Google project configuration controls quota and billing. AI-generated calculations, interpretations, formulas, and conclusions may be inaccurate and should be independently reviewed before you rely on them.</p>
         <h2>Service availability</h2>
         <p>The service may change, be interrupted, or require maintenance. Reasonable care is used to preserve data, but you should maintain independent backups of information that is critical to you.</p>
         <h2>Acceptable use</h2>

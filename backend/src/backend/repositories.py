@@ -183,3 +183,116 @@ class SpreadsheetRepository:
             return _cursor.rowcount > 0
 
         return await self._database.run(_delete)
+
+
+class GeminiSettingsRepository:
+    def __init__(self, database: Database, cipher: DataCipher) -> None:
+        self._database = database
+        self._cipher = cipher
+
+    async def save(self, user_id: int, api_key: str, status: str = "valid") -> datetime:
+        _now = datetime.now(UTC)
+        _encrypted_key = await self._cipher.encrypt_text(api_key)
+
+        def _save(_connection: sqlite3.Connection) -> None:
+            _connection.execute(
+                """
+                INSERT INTO user_ai_settings(user_id, encrypted_api_key, key_status, validated_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    encrypted_api_key = excluded.encrypted_api_key,
+                    key_status = excluded.key_status,
+                    validated_at = excluded.validated_at,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, _encrypted_key, status, _now.isoformat(), _now.isoformat()),
+            )
+
+        await self._database.run(_save)
+        return _now
+
+    async def get_key(self, user_id: int) -> str | None:
+        def _get(_connection: sqlite3.Connection) -> sqlite3.Row | None:
+            return _connection.execute(
+                "SELECT encrypted_api_key FROM user_ai_settings WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+
+        _row = await self._database.run(_get)
+        if _row is None:
+            return None
+        return await self._cipher.decrypt_text(_row["encrypted_api_key"])
+
+    async def status(self, user_id: int) -> tuple[str, datetime | None] | None:
+        def _get(_connection: sqlite3.Connection) -> sqlite3.Row | None:
+            return _connection.execute(
+                "SELECT key_status, validated_at FROM user_ai_settings WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+
+        _row = await self._database.run(_get)
+        if _row is None:
+            return None
+        _validated_at = datetime.fromisoformat(_row["validated_at"]) if _row["validated_at"] else None
+        return str(_row["key_status"]), _validated_at
+
+    async def mark_status(self, user_id: int, status: str) -> datetime | None:
+        _now = datetime.now(UTC)
+
+        def _mark(_connection: sqlite3.Connection) -> bool:
+            _cursor = _connection.execute(
+                "UPDATE user_ai_settings SET key_status = ?, validated_at = ?, updated_at = ? WHERE user_id = ?",
+                (status, _now.isoformat(), _now.isoformat(), user_id),
+            )
+            return _cursor.rowcount > 0
+
+        return _now if await self._database.run(_mark) else None
+
+    async def delete(self, user_id: int) -> None:
+        def _delete(_connection: sqlite3.Connection) -> None:
+            _connection.execute("DELETE FROM user_ai_settings WHERE user_id = ?", (user_id,))
+
+        await self._database.run(_delete)
+
+
+class AIAccessGrantRepository:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def create(self, user_id: int, spreadsheet_id: str | None, permission: str, token_hash: str, expires_at: datetime) -> None:
+        _now = datetime.now(UTC)
+
+        def _create(_connection: sqlite3.Connection) -> None:
+            _connection.execute("DELETE FROM ai_access_grants WHERE expires_at <= ?", (_now.isoformat(),))
+            _connection.execute(
+                """
+                INSERT INTO ai_access_grants(token_hash, user_id, spreadsheet_id, permission, expires_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (token_hash, user_id, spreadsheet_id, permission, expires_at.isoformat(), _now.isoformat()),
+            )
+
+        await self._database.run(_create)
+
+    async def validate(self, token_hash: str, user_id: int, spreadsheet_id: str | None, permission: str) -> bool:
+        def _validate(_connection: sqlite3.Connection) -> bool:
+            _row = _connection.execute(
+                """
+                SELECT expires_at FROM ai_access_grants
+                WHERE token_hash = ? AND user_id = ? AND permission = ?
+                  AND ((spreadsheet_id IS NULL AND ? IS NULL) OR spreadsheet_id = ?)
+                """,
+                (token_hash, user_id, permission, spreadsheet_id, spreadsheet_id),
+            ).fetchone()
+            return bool(_row and datetime.fromisoformat(_row["expires_at"]) > datetime.now(UTC))
+
+        return await self._database.run(_validate)
+
+    async def revoke(self, token_hash: str, user_id: int) -> None:
+        def _revoke(_connection: sqlite3.Connection) -> None:
+            _connection.execute(
+                "DELETE FROM ai_access_grants WHERE token_hash = ? AND user_id = ?",
+                (token_hash, user_id),
+            )
+
+        await self._database.run(_revoke)

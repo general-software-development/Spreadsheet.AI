@@ -50,3 +50,59 @@ class UserView(BaseModel):
     id: int
     email: str
     display_name: str
+
+
+class GeminiSettingsUpdate(BaseModel):
+    api_key: str = Field(min_length=10, max_length=500)
+
+
+class GeminiSettingsView(BaseModel):
+    configured: bool
+    status: str
+    primary_model: str
+    fallback_model: str
+    validated_at: datetime | None = None
+
+
+class AIAccessGrantRequest(BaseModel):
+    spreadsheet_id: str = Field(min_length=1, max_length=80)
+
+
+class AIAccessGrantView(BaseModel):
+    token: str
+    spreadsheet_id: str | None = None
+    permission: str
+    expires_at: datetime
+
+
+class AIMessageRequest(BaseModel):
+    mode: str = Field(pattern="^(assist|interpret|explain)$")
+    message: str = Field(min_length=1, max_length=20_000)
+    spreadsheet_id: str = Field(min_length=1, max_length=80)
+    access_token: str | None = Field(default=None, max_length=500)
+    selected_cell: str | None = Field(default=None, max_length=16)
+    context_scope: str = Field(default="current_sheet", pattern="^(current_sheet|workbook)$")
+
+
+class AIMessageResponse(BaseModel):
+    mode: str
+    model: str
+    message: str
+    sections: dict[str, list[str]] = Field(default_factory=dict)
+    changed_ranges: list[str] = Field(default_factory=list)
+    spreadsheet: SpreadsheetDocument | None = None
+
+
+class AICreateSpreadsheetRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=30_000)
+    access_token: str = Field(min_length=1, max_length=500)
+
+
+class AICreateSpreadsheetResponse(BaseModel):
+    model: str
+    message: str
+    spreadsheet: SpreadsheetDocument
+
+
+class AIAccessGrantRevokeRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=500)

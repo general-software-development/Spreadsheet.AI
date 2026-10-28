@@ -36,7 +36,7 @@ export default function HomePage() {
       <section id="features" className="feature-strip">
         <article><strong>01</strong><h2>Spreadsheet-native</h2><p>Cells, formulas, multiple sheets, keyboard-friendly editing.</p></article>
         <article><strong>02</strong><h2>Autosaved</h2><p>Your changes are stored continuously, so the latest version is ready anywhere.</p></article>
-        <article><strong>03</strong><h2>Private by design</h2><p>Minimal account data, encrypted workbook payloads, and no advertising profile.</p></article>
+        <article><strong>03</strong><h2>Gemini, on your terms</h2><p>Bring your own API key, free-tier models only, and explicit permissions before Assist can edit.</p></article>
       </section>
     </main>
   );

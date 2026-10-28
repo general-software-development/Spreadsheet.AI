@@ -46,6 +46,23 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_spreadsheets_user_updated
                     ON spreadsheets(user_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS user_ai_settings (
+                    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    encrypted_api_key TEXT NOT NULL,
+                    key_status TEXT NOT NULL,
+                    validated_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ai_access_grants (
+                    token_hash TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    spreadsheet_id TEXT REFERENCES spreadsheets(id) ON DELETE CASCADE,
+                    permission TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_ai_access_grants_user
+                    ON ai_access_grants(user_id, expires_at);
                 DROP TABLE IF EXISTS oauth_states;
                 """
             )
