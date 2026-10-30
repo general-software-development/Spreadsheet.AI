@@ -20,17 +20,17 @@ const MODE_COPY: Record<AIMode, { title: string; description: string; permission
   assist: {
     title: "Assist",
     description: "Helps you calculate, organize, and edit the workbook.",
-    permission: "Read & write after you allow access",
+    permission: "Real Spreadsheet.AI workbook · read & write after you allow access",
   },
   interpret: {
     title: "Interpret",
-    description: "Finds patterns and gives multiple reasonable conclusions with caveats.",
-    permission: "Read-only",
+    description: "Answers questions about your data, performs read-only calculations, and draws evidence-backed conclusions.",
+    permission: "Real Spreadsheet.AI workbook · read-only",
   },
   explain: {
     title: "Explain",
     description: "Teaches you how to understand the spreadsheet step-by-step.",
-    permission: "Read-only · no conclusions",
+    permission: "Real Spreadsheet.AI workbook · read-only · no conclusions",
   },
 };
 
@@ -49,7 +49,9 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
   const [aiError, setAiError] = useState("");
   const [conversation, setConversation] = useState<AIConversationItem[]>([]);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
   const latestDocument = useRef<SpreadsheetDocument | null>(null);
+  const conversationRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -75,6 +77,19 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
   }, [client, load]);
 
   useEffect(() => {
+    if (!aiOpen) {
+      return;
+    }
+    const _conversation = conversationRef.current;
+    if (!_conversation) {
+      return;
+    }
+    globalThis.requestAnimationFrame(() => {
+      _conversation.scrollTop = _conversation.scrollHeight;
+    });
+  }, [aiOpen, conversation.length, aiBusy]);
+
+  useEffect(() => {
     if (!aiOpen || aiSettings) {
       return;
     }
@@ -91,16 +106,35 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
   const activeSheet = document?.workbook.sheets.find((sheet) => sheet.id === document.workbook.activeSheetId) ?? document?.workbook.sheets[0];
   const engine = useMemo(() => new FormulaEngine(activeSheet?.cells ?? {}), [activeSheet?.cells]);
 
-  const persist = useCallback(async (nextDocument: SpreadsheetDocument) => {
+  const persist = useCallback(async (nextDocument: SpreadsheetDocument): Promise<boolean> => {
     setSaveState("saving");
-    try {
+    const saveOperation = saveChain.current.then(async () => {
       const saved = await client.update(nextDocument.id, nextDocument.title, nextDocument.workbook);
       latestDocument.current = saved;
+    });
+    saveChain.current = saveOperation.catch(() => undefined);
+    try {
+      await saveOperation;
       setSaveState("saved");
+      return true;
     } catch {
       setSaveState("error");
+      return false;
     }
   }, [client]);
+
+  const flushSpreadsheet = useCallback(async (): Promise<boolean> => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    const pending = latestDocument.current;
+    if (!pending) {
+      await saveChain.current;
+      return true;
+    }
+    return await persist(pending);
+  }, [persist]);
 
   const queueSave = useCallback((nextDocument: SpreadsheetDocument) => {
     latestDocument.current = nextDocument;
@@ -108,6 +142,7 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
       clearTimeout(saveTimer.current);
     }
     saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
       void persist(nextDocument);
     }, 650);
   }, [persist]);
@@ -214,10 +249,15 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
     }
     setAiBusy(true);
     setAiError("");
-    setAiInput("");
-    const userItem: AIConversationItem = { id: `u-${Date.now()}`, role: "user", text: message };
-    setConversation((current) => [...current, userItem]);
     try {
+      const saved = await flushSpreadsheet();
+      if (!saved) {
+        setAiError("Save the spreadsheet successfully before asking Gemini so it can read the current platform data.");
+        return;
+      }
+      setAiInput("");
+      const userItem: AIConversationItem = { id: `u-${Date.now()}`, role: "user", text: message };
+      setConversation((current) => [...current, userItem]);
       const response = await client.aiMessage(aiMode, message, id, aiGrant?.token, selectedCell, aiContextScope);
       if (response.spreadsheet) {
         latestDocument.current = response.spreadsheet;
@@ -252,7 +292,7 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
       <header className="editor-topbar">
         <Link href="/sheets" className="back-button" aria-label="Back to spreadsheets">←</Link>
         <div className="editor-title-group">
-          <input aria-label="Spreadsheet title" className="title-input" value={document.title} onChange={(event) => setTitle(event.target.value)} />
+          <input aria-label="Spreadsheet title" className="title-input" value={document.title} onChange={(event) => setTitle(event.target.value)} disabled={aiBusy} />
           <span className={`save-state ${saveState}`}>{saveState === "saving" ? "Saving…" : saveState === "error" ? "Save failed" : "Saved"}</span>
         </div>
         <div className="editor-actions">
@@ -269,7 +309,7 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
       </div>
       <div className="formula-bar">
         <strong>{selectedCell}</strong><span className="fx">fx</span>
-        <input aria-label="Formula bar" value={selectedRaw} onChange={(event) => setCell(selectedCell, event.target.value)} placeholder="Type a value or formula, e.g. =SUM(A1:A5)" />
+        <input aria-label="Formula bar" value={selectedRaw} onChange={(event) => setCell(selectedCell, event.target.value)} placeholder="Type a value or formula, e.g. =SUM(A1:A5)" disabled={aiBusy} />
       </div>
       <div className="grid-scroller">
         <div className="spreadsheet-grid" style={{ gridTemplateColumns: `52px repeat(${COLUMNS}, minmax(112px, 1fr))` }}>
@@ -298,6 +338,7 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
                       if (event.key === "ArrowLeft") { event.preventDefault(); moveSelection(cellId, -1, 0); }
                     }}
                     aria-label={`Cell ${cellId}`}
+                    disabled={aiBusy}
                   />
                 );
               }),
@@ -306,9 +347,9 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
         </div>
       </div>
       <footer className="sheet-tabs">
-        <button className="add-sheet" onClick={addSheet} aria-label="Add sheet">＋</button>
+        <button className="add-sheet" onClick={addSheet} aria-label="Add sheet" disabled={aiBusy}>＋</button>
         {workbook.sheets.map((sheet) => (
-          <button key={sheet.id} onClick={() => switchSheet(sheet.id)} className={sheet.id === workbook.activeSheetId ? "active" : ""}>{sheet.name}</button>
+          <button key={sheet.id} onClick={() => switchSheet(sheet.id)} className={sheet.id === workbook.activeSheetId ? "active" : ""} disabled={aiBusy}>{sheet.name}</button>
         ))}
         <span className="sheet-spacer" /><span className="grid-size">{ROWS} × {COLUMNS}</span>
       </footer>
@@ -353,11 +394,11 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
             )
           ) : null}
 
-          <div className="ai-conversation">
+          <div className="ai-conversation" ref={conversationRef} role="log" aria-live="polite" aria-label="AI conversation">
             {conversation.length === 0 ? (
               <div className="ai-empty-copy">
                 <strong>Ask about the spreadsheet</strong>
-                <p>{aiMode === "assist" ? "Try “calculate the percentage change and add it in column D.”" : aiMode === "interpret" ? "Try “what patterns and plausible conclusions stand out?”" : "Try “teach me how to understand this table.”"}</p>
+                <p>{aiMode === "assist" ? "Try “calculate the percentage change and add it in column D.”" : aiMode === "interpret" ? "Try “calculate the total tax from this data” or “what patterns stand out?”" : "Try “teach me how to understand this table.”"}</p>
               </div>
             ) : conversation.map((item) => (
               <article className={`ai-message ${item.role}`} key={item.id}>

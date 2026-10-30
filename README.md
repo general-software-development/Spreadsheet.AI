@@ -24,11 +24,11 @@ The backend currently hard-allowlists only:
 
 These model IDs are currently documented by Google as supporting free-tier text input/output. Spreadsheet.AI does not automatically fall back to any model outside this allowlist. The user's own Google project still determines quota and billing configuration.
 
-The UI exposes three modes:
+The UI exposes three modes. All three operate on the user's real Spreadsheet.AI workbook loaded from the encrypted SQLite repository; the `WorkbookProjection` class is only the compact representation sent to Gemini, not a separate or disposable spreadsheet copy. Before an AI request is sent, the editor flushes any pending autosave to the backend so Gemini reads the current persisted workbook. Spreadsheet editing is temporarily locked while the request is in flight to prevent an AI response from racing newer local edits.
 
-- **Assist** — read/write, but only after a short-lived, user-specific, spreadsheet-specific capability grant is created by an explicit user action. The raw grant token exists only in the client session; SQLite stores only its SHA3-512 hash. The grant can be revoked.
-- **Interpret** — read-only. Separates observations from multiple plausible conclusions and limitations.
-- **Explain** — read-only. Teaches the user how to understand the spreadsheet step-by-step without drawing substantive conclusions for them.
+- **Assist** — read/write, but only after a short-lived, user-specific, spreadsheet-specific capability grant is created by an explicit user action. The raw grant token exists only in the client session; SQLite stores only its SHA3-512 hash. The grant can be revoked. Approved mutations are applied back to the same persisted workbook through `SpreadsheetRepository.update`.
+- **Interpret** — read-only. Reads the persisted workbook and separates observations from multiple plausible conclusions and limitations.
+- **Explain** — read-only. Reads the persisted workbook and teaches the user how to understand the spreadsheet step-by-step without drawing substantive conclusions for them.
 
 **Create with AI** uses a separate one-time creation grant and never gives Gemini access to existing workbooks.
 

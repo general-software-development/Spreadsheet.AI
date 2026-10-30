@@ -35,7 +35,7 @@ export default function GeminiSetupPage() {
         <p>Google states that content submitted through the Gemini API free tier may be used to improve its products. Only send spreadsheet data you are comfortable processing under those terms. Spreadsheet.AI itself does not persist AI chat history in this implementation.</p>
 
         <h2>Troubleshooting</h2>
-        <p><strong>Invalid key:</strong> create a new Gemini key and save it again. <strong>429 / quota:</strong> your project has reached a free-tier rate or usage limit; wait for quota to recover. <strong>Unavailable:</strong> retry later; Spreadsheet.AI may automatically try the allowlisted free fallback model.</p>
+        <p><strong>Invalid key:</strong> create a new Gemini key and save it again. <strong>429 / quota:</strong> your project has reached a free-tier rate or usage limit; wait for quota to recover. <strong>Unavailable:</strong> Spreadsheet.AI automatically retries transient Gemini errors with short exponential backoff, then tries the allowlisted free fallback model. If both remain overloaded, retry later.</p>
       </article>
     </main>
   );

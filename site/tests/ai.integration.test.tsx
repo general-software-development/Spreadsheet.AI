@@ -36,7 +36,14 @@ class FakeAIEditorApi {
     permission: "read_write",
     expires_at: "2026-10-28T11:00:00Z",
   }));
-  aiMessage = vi.fn(async (): Promise<AIMessageResponse> => ({
+  aiMessage = vi.fn(async (mode: string, message: string): Promise<AIMessageResponse> => mode === "interpret" ? ({
+    mode: "interpret",
+    model: "gemini-3.8-flash",
+    message: message.includes("tax") ? "I need the tax jurisdiction and tax year before I can calculate a reliable tax amount." : "I interpreted the sheet.",
+    sections: { calculations: message.includes("tax") ? ["Income available: 100."] : [], observations: [], conclusions: [], limitations: [] },
+    changed_ranges: [],
+    spreadsheet: null,
+  }) : ({
     mode: "assist",
     model: "gemini-3.8-flash",
     message: "I can help with that.",
@@ -79,8 +86,35 @@ describe("Gemini UI integration", () => {
     await screen.findByText(/Read & write allowed/);
     expect(api.createAIAccessGrant).toHaveBeenCalledWith("sheet-1");
 
+    fireEvent.change(screen.getByLabelText("Cell A1"), { target: { value: "125" } });
     fireEvent.click(screen.getByLabelText("Send to Gemini"));
+
+    await waitFor(() => expect(api.update).toHaveBeenCalled());
+    const savedWorkbook = api.update.mock.calls.at(-1)?.[2];
+    expect(savedWorkbook?.sheets[0].cells.A1).toBe("125");
     await waitFor(() => expect(api.aiMessage).toHaveBeenCalledWith("assist", "Calculate the total", "sheet-1", "grant-token", "A1", "current_sheet"));
+    expect(api.update.mock.invocationCallOrder.at(-1)).toBeLessThan(api.aiMessage.mock.invocationCallOrder[0]);
     expect(await screen.findByText("I can help with that.")).toBeInTheDocument();
+  });
+
+  it("keeps the conversation in a dedicated log and lets Interpret answer direct calculations", async () => {
+    const api = new FakeAIEditorApi();
+    render(<SpreadsheetEditor id="sheet-1" api={api as unknown as SpreadsheetApi} />);
+
+    await screen.findByLabelText("Cell A1");
+    fireEvent.click(screen.getByRole("button", { name: "✦ AI" }));
+    await screen.findByText(/No spreadsheet access/);
+    fireEvent.click(screen.getByRole("button", { name: "Interpret" }));
+
+    expect(screen.getByRole("log", { name: "AI conversation" })).toHaveClass("ai-conversation");
+    expect(screen.getByText(/performs read-only calculations/)).toBeInTheDocument();
+
+    const composer = screen.getByLabelText("Ask Spreadsheet AI");
+    fireEvent.change(composer, { target: { value: "Calculate my tax from this data" } });
+    fireEvent.click(screen.getByLabelText("Send to Gemini"));
+
+    expect(await screen.findByText(/tax jurisdiction and tax year/)).toBeInTheDocument();
+    expect(await screen.findByText("Income available: 100.")).toBeInTheDocument();
+    expect(api.aiMessage).toHaveBeenCalledWith("interpret", "Calculate my tax from this data", "sheet-1", undefined, "A1", "current_sheet");
   });
 });

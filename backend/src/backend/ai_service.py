@@ -117,8 +117,15 @@ class AIAssistantService:
             _actions = _result.payload.get("actions", [])
             if not isinstance(_actions, list):
                 _actions = []
-            _updated_workbook, _changed_ranges = self._mutations.apply(_document.workbook, _actions)
+            _default_sheet_id = _document.workbook.activeSheetId if request.context_scope == "current_sheet" else None
+            _updated_workbook, _changed_ranges = self._mutations.apply(
+                _document.workbook,
+                _actions,
+                default_sheet_id=_default_sheet_id,
+            )
             _updated_document = _document
+            _sections: dict[str, list[str]] = {}
+            _message = str(_result.payload.get("message", "")).strip()
             if _changed_ranges:
                 _saved = await self._spreadsheets.update(
                     user_id,
@@ -128,10 +135,19 @@ class AIAssistantService:
                 if _saved is None:
                     raise AIResourceNotFoundError("Spreadsheet not found")
                 _updated_document = _saved
+                _sections["status"] = [f"Applied {len(_changed_ranges)} spreadsheet change(s)."]
+            else:
+                _sections["status"] = ["No spreadsheet changes were applied."]
+                if _actions:
+                    _message = (
+                        "Gemini proposed spreadsheet changes, but Spreadsheet.AI could not apply them safely. "
+                        "No spreadsheet was modified. Try naming the target sheet or range more explicitly."
+                    )
             return AIMessageResponse(
                 mode="assist",
                 model=_result.model,
-                message=str(_result.payload.get("message", "")),
+                message=_message,
+                sections=_sections,
                 changed_ranges=_changed_ranges,
                 spreadsheet=_updated_document if _changed_ranges else None,
             )
@@ -148,8 +164,8 @@ class AIAssistantService:
             return AIMessageResponse(
                 mode="interpret",
                 model=_result.model,
-                message=str(_result.payload.get("summary", "")),
-                sections=self._list_sections(_result.payload, ("observations", "conclusions", "limitations")),
+                message=str(_result.payload.get("answer", "")),
+                sections=self._list_sections(_result.payload, ("calculations", "observations", "conclusions", "limitations")),
             )
 
         _system, _prompt, _schema = GeminiPromptFactory.explain(
@@ -232,14 +248,12 @@ class AIAssistantService:
             if not isinstance(_sheet_input, dict):
                 continue
             _name = str(_sheet_input.get("name", f"Sheet {_index}")).strip()[:80] or f"Sheet {_index}"
-            _cells_input = _sheet_input.get("cells", {})
             _cells: dict[str, str] = {}
-            if isinstance(_cells_input, dict):
-                for _cell_id, _value in _cells_input.items():
-                    if isinstance(_cell_id, str) and AssistMutationService.is_valid_cell(_cell_id) and isinstance(_value, str):
-                        _cells[_cell_id] = _value[:10_000]
-                        if len(_cells) >= AssistMutationService.MAX_MUTATED_CELLS:
-                            break
+            for _cell_id, _value in AssistMutationService.parse_cell_entries(_sheet_input.get("cells", [])):
+                if AssistMutationService.is_valid_cell(_cell_id):
+                    _cells[_cell_id] = _value[:10_000]
+                    if len(_cells) >= AssistMutationService.MAX_MUTATED_CELLS:
+                        break
             _sheets.append(SheetData(id=f"ai-sheet-{_index}", name=_name, cells=_cells))
         if not _sheets:
             raise ValueError("Gemini did not return a usable spreadsheet")
