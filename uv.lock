@@ -395,12 +395,12 @@ dependencies = [
     { name = "anyio" },
     { name = "cryptography" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-anyio" },
 ]
@@ -410,12 +410,12 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.15.1" },
     { name = "cryptography", specifier = ">=46.0.0" },
     { name = "fastapi", specifier = ">=0.142.2" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "uvicorn", specifier = ">=0.38.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-anyio", specifier = ">=0.0.0" },
 ]

@@ -1,4 +1,15 @@
-import type { SpreadsheetDocument, SpreadsheetSummary, UserView, WorkbookData } from "./types";
+import type {
+  AIAccessGrant,
+  AICreateSpreadsheetResponse,
+  AIContextScope,
+  AIMode,
+  AIMessageResponse,
+  GeminiSettings,
+  SpreadsheetDocument,
+  SpreadsheetSummary,
+  UserView,
+  WorkbookData,
+} from "./types";
 
 class ApiError extends Error {
   readonly status: number;
@@ -26,8 +37,17 @@ export class SpreadsheetApi {
       },
     });
     if (!response.ok) {
-      const message = await response.text();
-      throw new ApiError(response.status, message || response.statusText);
+      const rawMessage = await response.text();
+      let message = rawMessage || response.statusText;
+      try {
+        const parsed = JSON.parse(rawMessage) as { detail?: string };
+        if (typeof parsed.detail === "string") {
+          message = parsed.detail;
+        }
+      } catch {
+        // Plain-text errors are valid API responses too.
+      }
+      throw new ApiError(response.status, message);
     }
     if (response.status === 204) {
       return undefined as T;
@@ -71,6 +91,71 @@ export class SpreadsheetApi {
 
   async delete(id: string): Promise<void> {
     await this.request<void>(`/api/spreadsheets/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async geminiSettings(): Promise<GeminiSettings> {
+    return await this.request<GeminiSettings>("/api/settings/gemini");
+  }
+
+  async saveGeminiKey(apiKey: string): Promise<GeminiSettings> {
+    return await this.request<GeminiSettings>("/api/settings/gemini", {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+  }
+
+  async testGeminiKey(): Promise<GeminiSettings> {
+    return await this.request<GeminiSettings>("/api/settings/gemini/test", { method: "POST" });
+  }
+
+  async removeGeminiKey(): Promise<void> {
+    await this.request<void>("/api/settings/gemini", { method: "DELETE" });
+  }
+
+  async createAIAccessGrant(spreadsheetId: string): Promise<AIAccessGrant> {
+    return await this.request<AIAccessGrant>("/api/ai/access-grants", {
+      method: "POST",
+      body: JSON.stringify({ spreadsheet_id: spreadsheetId }),
+    });
+  }
+
+  async createAICreationGrant(): Promise<AIAccessGrant> {
+    return await this.request<AIAccessGrant>("/api/ai/create-grants", { method: "POST" });
+  }
+
+  async revokeAIAccessGrant(token: string): Promise<void> {
+    await this.request<void>("/api/ai/access-grants/revoke", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  async aiMessage(
+    mode: AIMode,
+    message: string,
+    spreadsheetId: string,
+    accessToken?: string,
+    selectedCell?: string,
+    contextScope: AIContextScope = "current_sheet",
+  ): Promise<AIMessageResponse> {
+    return await this.request<AIMessageResponse>("/api/ai/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        mode,
+        message,
+        spreadsheet_id: spreadsheetId,
+        access_token: accessToken ?? null,
+        selected_cell: selectedCell ?? null,
+        context_scope: contextScope,
+      }),
+    });
+  }
+
+  async createSpreadsheetWithAI(message: string, accessToken: string): Promise<AICreateSpreadsheetResponse> {
+    return await this.request<AICreateSpreadsheetResponse>("/api/ai/create-spreadsheet", {
+      method: "POST",
+      body: JSON.stringify({ message, access_token: accessToken }),
+    });
   }
 
   async logout(): Promise<void> {

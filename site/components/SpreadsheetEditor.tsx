@@ -3,19 +3,55 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SpreadsheetApi } from "@/lib/api";
-import type { SpreadsheetDocument, WorkbookData } from "@/lib/types";
+import type { AIAccessGrant, AIContextScope, AIMode, AIMessageResponse, GeminiSettings, SpreadsheetDocument, WorkbookData } from "@/lib/types";
 import { FormulaEngine, WorkbookFactory } from "@/lib/workbook";
 
 const ROWS = 60;
 const COLUMNS = 20;
+
+interface AIConversationItem {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  response?: AIMessageResponse;
+}
+
+const MODE_COPY: Record<AIMode, { title: string; description: string; permission: string }> = {
+  assist: {
+    title: "Assist",
+    description: "Helps you calculate, organize, and edit the workbook.",
+    permission: "Real Spreadsheet.AI workbook · read & write after you allow access",
+  },
+  interpret: {
+    title: "Interpret",
+    description: "Answers questions about your data, performs read-only calculations, and draws evidence-backed conclusions.",
+    permission: "Real Spreadsheet.AI workbook · read-only",
+  },
+  explain: {
+    title: "Explain",
+    description: "Teaches you how to understand the spreadsheet step-by-step.",
+    permission: "Real Spreadsheet.AI workbook · read-only · no conclusions",
+  },
+};
 
 export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetApi }) {
   const [client] = useState(() => api ?? new SpreadsheetApi());
   const [document, setDocument] = useState<SpreadsheetDocument | null>(null);
   const [selectedCell, setSelectedCell] = useState("A1");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiMode, setAiMode] = useState<AIMode>("assist");
+  const [aiSettings, setAiSettings] = useState<GeminiSettings | null>(null);
+  const [aiGrant, setAiGrant] = useState<AIAccessGrant | null>(null);
+  const [aiInput, setAiInput] = useState("");
+  const [aiContextScope, setAiContextScope] = useState<AIContextScope>("current_sheet");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [conversation, setConversation] = useState<AIConversationItem[]>([]);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
   const latestDocument = useRef<SpreadsheetDocument | null>(null);
+  const conversationRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -40,19 +76,65 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
     };
   }, [client, load]);
 
+  useEffect(() => {
+    if (!aiOpen) {
+      return;
+    }
+    const _conversation = conversationRef.current;
+    if (!_conversation) {
+      return;
+    }
+    globalThis.requestAnimationFrame(() => {
+      _conversation.scrollTop = _conversation.scrollHeight;
+    });
+  }, [aiOpen, conversation.length, aiBusy]);
+
+  useEffect(() => {
+    if (!aiOpen || aiSettings) {
+      return;
+    }
+    const loadAISettings = async () => {
+      try {
+        setAiSettings(await client.geminiSettings());
+      } catch (caught) {
+        setAiError(caught instanceof Error ? caught.message : "Gemini settings could not be loaded.");
+      }
+    };
+    void loadAISettings();
+  }, [aiOpen, aiSettings, client]);
+
   const activeSheet = document?.workbook.sheets.find((sheet) => sheet.id === document.workbook.activeSheetId) ?? document?.workbook.sheets[0];
   const engine = useMemo(() => new FormulaEngine(activeSheet?.cells ?? {}), [activeSheet?.cells]);
 
-  const persist = useCallback(async (nextDocument: SpreadsheetDocument) => {
+  const persist = useCallback(async (nextDocument: SpreadsheetDocument): Promise<boolean> => {
     setSaveState("saving");
-    try {
+    const saveOperation = saveChain.current.then(async () => {
       const saved = await client.update(nextDocument.id, nextDocument.title, nextDocument.workbook);
       latestDocument.current = saved;
+    });
+    saveChain.current = saveOperation.catch(() => undefined);
+    try {
+      await saveOperation;
       setSaveState("saved");
+      return true;
     } catch {
       setSaveState("error");
+      return false;
     }
   }, [client]);
+
+  const flushSpreadsheet = useCallback(async (): Promise<boolean> => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    const pending = latestDocument.current;
+    if (!pending) {
+      await saveChain.current;
+      return true;
+    }
+    return await persist(pending);
+  }, [persist]);
 
   const queueSave = useCallback((nextDocument: SpreadsheetDocument) => {
     latestDocument.current = nextDocument;
@@ -60,6 +142,7 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
       clearTimeout(saveTimer.current);
     }
     saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
       void persist(nextDocument);
     }, 650);
   }, [persist]);
@@ -126,6 +209,75 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
     });
   };
 
+  const allowAssist = async () => {
+    setAiBusy(true);
+    setAiError("");
+    try {
+      const grant = await client.createAIAccessGrant(id);
+      setAiGrant(grant);
+    } catch (caught) {
+      setAiError(caught instanceof Error ? caught.message : "Access could not be granted.");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const revokeAssist = async () => {
+    if (!aiGrant) {
+      return;
+    }
+    setAiBusy(true);
+    setAiError("");
+    try {
+      await client.revokeAIAccessGrant(aiGrant.token);
+      setAiGrant(null);
+    } catch (caught) {
+      setAiError(caught instanceof Error ? caught.message : "Access could not be revoked.");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const sendAIMessage = async () => {
+    const message = aiInput.trim();
+    if (!message || !document) {
+      return;
+    }
+    if (aiMode === "assist" && !aiGrant) {
+      setAiError("Allow Assist read/write access to this spreadsheet before sending a request.");
+      return;
+    }
+    setAiBusy(true);
+    setAiError("");
+    try {
+      const saved = await flushSpreadsheet();
+      if (!saved) {
+        setAiError("Save the spreadsheet successfully before asking Gemini so it can read the current platform data.");
+        return;
+      }
+      setAiInput("");
+      const userItem: AIConversationItem = { id: `u-${Date.now()}`, role: "user", text: message };
+      setConversation((current) => [...current, userItem]);
+      const response = await client.aiMessage(aiMode, message, id, aiGrant?.token, selectedCell, aiContextScope);
+      if (response.spreadsheet) {
+        latestDocument.current = response.spreadsheet;
+        setDocument(response.spreadsheet);
+        setSaveState("saved");
+      }
+      const assistantItem: AIConversationItem = {
+        id: `a-${Date.now()}`,
+        role: "assistant",
+        text: response.message,
+        response,
+      };
+      setConversation((current) => [...current, assistantItem]);
+    } catch (caught) {
+      setAiError(caught instanceof Error ? caught.message : "Gemini could not answer this request.");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
   if (!document || !activeSheet) {
     return <main className="editor-loading">Loading spreadsheet…</main>;
   }
@@ -133,16 +285,20 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
   const selectedRaw = activeSheet.cells[selectedCell] ?? "";
   const columnNames = Array.from({ length: COLUMNS }, (_, index) => FormulaEngine.columnName(index + 1));
   const workbook: WorkbookData = document.workbook;
+  const modeCopy = MODE_COPY[aiMode as AIMode];
 
   return (
     <main className="editor-shell">
       <header className="editor-topbar">
         <Link href="/sheets" className="back-button" aria-label="Back to spreadsheets">←</Link>
         <div className="editor-title-group">
-          <input aria-label="Spreadsheet title" className="title-input" value={document.title} onChange={(event) => setTitle(event.target.value)} />
+          <input aria-label="Spreadsheet title" className="title-input" value={document.title} onChange={(event) => setTitle(event.target.value)} disabled={aiBusy} />
           <span className={`save-state ${saveState}`}>{saveState === "saving" ? "Saving…" : saveState === "error" ? "Save failed" : "Saved"}</span>
         </div>
-        <div className="editor-actions"><span className="secure-pill">● Encrypted at rest</span></div>
+        <div className="editor-actions">
+          <button className={`ai-open-button ${aiOpen ? "active" : ""}`} onClick={() => setAiOpen((current) => !current)}>✦ AI</button>
+          <span className="secure-pill">● Encrypted at rest</span>
+        </div>
       </header>
       <div className="toolbar">
         <span className="toolbar-label">Formula help</span>
@@ -153,7 +309,7 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
       </div>
       <div className="formula-bar">
         <strong>{selectedCell}</strong><span className="fx">fx</span>
-        <input aria-label="Formula bar" value={selectedRaw} onChange={(event) => setCell(selectedCell, event.target.value)} placeholder="Type a value or formula, e.g. =SUM(A1:A5)" />
+        <input aria-label="Formula bar" value={selectedRaw} onChange={(event) => setCell(selectedCell, event.target.value)} placeholder="Type a value or formula, e.g. =SUM(A1:A5)" disabled={aiBusy} />
       </div>
       <div className="grid-scroller">
         <div className="spreadsheet-grid" style={{ gridTemplateColumns: `52px repeat(${COLUMNS}, minmax(112px, 1fr))` }}>
@@ -182,6 +338,7 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
                       if (event.key === "ArrowLeft") { event.preventDefault(); moveSelection(cellId, -1, 0); }
                     }}
                     aria-label={`Cell ${cellId}`}
+                    disabled={aiBusy}
                   />
                 );
               }),
@@ -190,12 +347,103 @@ export function SpreadsheetEditor({ id, api }: { id: string; api?: SpreadsheetAp
         </div>
       </div>
       <footer className="sheet-tabs">
-        <button className="add-sheet" onClick={addSheet} aria-label="Add sheet">＋</button>
+        <button className="add-sheet" onClick={addSheet} aria-label="Add sheet" disabled={aiBusy}>＋</button>
         {workbook.sheets.map((sheet) => (
-          <button key={sheet.id} onClick={() => switchSheet(sheet.id)} className={sheet.id === workbook.activeSheetId ? "active" : ""}>{sheet.name}</button>
+          <button key={sheet.id} onClick={() => switchSheet(sheet.id)} className={sheet.id === workbook.activeSheetId ? "active" : ""} disabled={aiBusy}>{sheet.name}</button>
         ))}
         <span className="sheet-spacer" /><span className="grid-size">{ROWS} × {COLUMNS}</span>
       </footer>
+
+      {aiOpen ? (
+        <aside className="ai-panel" aria-label="Spreadsheet AI">
+          <div className="ai-panel-header">
+            <div><span className="ai-spark">✦</span><strong>Spreadsheet AI</strong></div>
+            <button aria-label="Close AI" onClick={() => setAiOpen(false)}>×</button>
+          </div>
+          <div className="ai-mode-tabs" role="tablist" aria-label="AI mode">
+            {(Object.keys(MODE_COPY) as AIMode[]).map((mode) => (
+              <button key={mode} className={aiMode === mode ? "active" : ""} onClick={() => { setAiMode(mode); setAiError(""); }}>{MODE_COPY[mode].title}</button>
+            ))}
+          </div>
+          <div className="ai-mode-explainer">
+            <strong>{modeCopy.title}</strong>
+            <p>{modeCopy.description}</p>
+            <span>{modeCopy.permission}</span>
+          </div>
+
+          {aiSettings && !aiSettings.configured ? (
+            <div className="ai-config-card">
+              <strong>Gemini needs an API key</strong>
+              <p>Add your key once in Settings, then return here.</p>
+              <Link href="/settings" className="button primary">Open Settings</Link>
+              <Link href="/gemini-setup" className="text-link">Setup guide →</Link>
+            </div>
+          ) : null}
+
+          {aiMode === "assist" && aiSettings?.configured ? (
+            aiGrant ? (
+              <div className="ai-access-card allowed">
+                <div><strong>● Read & write allowed</strong><span>Only for “{document.title}” · expires {new Date(aiGrant.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
+                <button disabled={aiBusy} onClick={() => void revokeAssist()}>Revoke</button>
+              </div>
+            ) : (
+              <div className="ai-access-card locked">
+                <div><strong>🔒 No spreadsheet access</strong><span>Assist cannot read or change this workbook until you explicitly allow it.</span></div>
+                <button disabled={aiBusy} onClick={() => void allowAssist()}>Allow read & write</button>
+              </div>
+            )
+          ) : null}
+
+          <div className="ai-conversation" ref={conversationRef} role="log" aria-live="polite" aria-label="AI conversation">
+            {conversation.length === 0 ? (
+              <div className="ai-empty-copy">
+                <strong>Ask about the spreadsheet</strong>
+                <p>{aiMode === "assist" ? "Try “calculate the percentage change and add it in column D.”" : aiMode === "interpret" ? "Try “calculate the total tax from this data” or “what patterns stand out?”" : "Try “teach me how to understand this table.”"}</p>
+              </div>
+            ) : conversation.map((item) => (
+              <article className={`ai-message ${item.role}`} key={item.id}>
+                <span>{item.role === "user" ? "You" : "Gemini"}</span>
+                <p>{item.text}</p>
+                {item.response ? (Object.entries(item.response.sections) as Array<[string, string[]]>).map(([section, items]) => items.length ? (
+                  <div className="ai-response-section" key={section}>
+                    <strong>{section.replaceAll("_", " ")}</strong>
+                    <ul>{items.map((value, index) => <li key={`${section}-${index}`}>{value}</li>)}</ul>
+                  </div>
+                ) : null) : null}
+                {item.response?.changed_ranges.length ? <div className="ai-changes"><strong>Changes applied</strong><span>{item.response.changed_ranges.join(" · ")}</span></div> : null}
+                {item.response ? <small>{item.response.model}</small> : null}
+              </article>
+            ))}
+          </div>
+
+          {aiError ? <p className="ai-panel-error">{aiError}</p> : null}
+          <div className="ai-composer">
+            <div className="ai-context-row">
+              <span>Context</span>
+              <select aria-label="AI context" value={aiContextScope} onChange={(event) => setAiContextScope(event.target.value as AIContextScope)}>
+                <option value="current_sheet">Current sheet · {activeSheet.name}</option>
+                <option value="workbook">Entire spreadsheet</option>
+              </select>
+              <span>Selected {selectedCell}</span>
+            </div>
+            <textarea
+              aria-label="Ask Spreadsheet AI"
+              value={aiInput}
+              onChange={(event) => setAiInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendAIMessage();
+                }
+              }}
+              placeholder={`Ask ${modeCopy.title}…`}
+              disabled={aiBusy || !aiSettings?.configured}
+            />
+            <button className="ai-send" aria-label="Send to Gemini" disabled={aiBusy || !aiInput.trim() || !aiSettings?.configured || (aiMode === "assist" && !aiGrant)} onClick={() => void sendAIMessage()}>{aiBusy ? "…" : "↑"}</button>
+          </div>
+          <div className="ai-panel-footer">Free-tier models only · <Link href="/gemini-setup">How Gemini works</Link></div>
+        </aside>
+      ) : null}
     </main>
   );
 }
